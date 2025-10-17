@@ -1,0 +1,45 @@
+# Retrieval and RAG configuration
+retrieval:
+  # Embedding model settings
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  embedding_dim: 384
+  
+  # Vector store settings
+  vector_store: "faiss"  # faiss, chroma, pinecone
+  index_type: "IndexFlatIP"  # IndexFlatIP, IndexIVFFlat, etc.
+  
+  # Retrieval parameters
+  top_k: 5
+  similarity_threshold: 0.7
+  max_context_length: 2048
+  
+  # Document processing
+  chunk_size: 512
+  chunk_overlap: 50
+  preprocessing:
+    remove_headers: true
+    remove_footers: true
+    clean_text: true
+
+# Data sources for retrieval
+data_sources:
+  news:
+    enabled: true
+    sources: ["reuters", "bloomberg", "yahoo_finance"]
+    update_frequency: "daily"
+  
+  fundamentals:
+    enabled: true
+    sources: ["sec_filings", "earnings_calls"]
+    update_frequency: "quarterly"
+  
+  market_data:
+    enabled: true
+    sources: ["price_data", "volume_data", "technical_indicators"]
+    update_frequency: "daily"
+
+# Index management
+index_management:
+  rebuild_frequency: "weekly"
+  backup_enabled: true
+  backup_location: "./data/retrieval_corpus/backups"

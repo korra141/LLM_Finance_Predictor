@@ -1,0 +1,23 @@
+# Base model configuration
+model:
+  name: "microsoft/DialoGPT-medium"  # or your preferred base model
+  size: "medium"  # small, medium, large, xl
+  quantization: "4bit"  # none, 4bit, 8bit
+  max_length: 512
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 50
+
+# Model architecture settings
+architecture:
+  use_lora: true
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.1
+  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
+
+# Hardware settings
+hardware:
+  device: "auto"  # auto, cpu, cuda, mps
+  mixed_precision: true
+  gradient_checkpointing: true
