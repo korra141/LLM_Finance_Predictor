@@ -89,9 +89,9 @@ class FinancialDataset(Dataset):
         return {
             'input_ids': encoding['input_ids'].squeeze(0),
             'attention_mask': encoding['attention_mask'].squeeze(0),
-            'labels': target,
-            'symbol': row['symbol'],
-            'date': str(row['date'])
+            'labels': target
+            # 'symbol': row['symbol'],
+            # 'date': str(row['date'])
         }
     
     def _prepare_features(self, row: pd.Series) -> str:

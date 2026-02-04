@@ -146,6 +146,8 @@ models/
 *.bin
 *.safetensors
 
+notebooks/models/*
+
 # Logs
 logs/
 *.log

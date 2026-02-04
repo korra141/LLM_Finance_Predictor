@@ -8,10 +8,13 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM, 
+    AutoModelForSequenceClassification,
     AutoTokenizer, 
     TrainingArguments, 
     Trainer,
-    DataCollatorForLanguageModeling
+    DataCollatorForLanguageModeling,
+    DataCollatorWithPadding,
+    default_data_collator
 )
 from peft import LoraConfig, get_peft_model, TaskType
 import logging
@@ -22,6 +25,48 @@ from datetime import datetime
 import wandb
 
 logger = logging.getLogger(__name__)
+
+
+# @dataclass
+class DataCollatorWithMetadata:
+    """
+    Data collator that handles both tensor fields (for model input) 
+    and metadata fields (symbol, date) that should be kept as-is.
+    """
+    # tokenizer: PreTrainedTokenizerBase
+    def __init__(self, tokenizer: AutoTokenizer):
+        self.tokenizer = tokenizer
+
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # Separate tensor fields from metadata
+        tensor_keys = ['input_ids', 'attention_mask', 'labels']
+        metadata_keys = ['symbol', 'date']
+        
+        # Extract only tensor fields for collation
+        batch = {}
+        
+        # Collate tensor fields
+        for key in tensor_keys:
+            if key in features[0]:
+                values = [f[key] for f in features]
+                if isinstance(values[0], torch.Tensor):
+                    # Stack tensors
+                    if values[0].dim() == 0:  # Scalar (like labels)
+                        batch[key] = torch.stack(values)
+                    else:  # Sequence (like input_ids)
+                        batch[key] = torch.stack(values)
+                else:
+                    batch[key] = torch.tensor(values)
+        
+        # Keep metadata as lists (not tensors)
+        for key in metadata_keys:
+            if key in features[0]:
+                batch[key] = [f[key] for f in features]
+        
+        return batch
+
+
+
 
 
 class FinancialModelTrainer:
@@ -63,11 +108,22 @@ class FinancialModelTrainer:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
         # Load model
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.float16 if model_config.get('quantization') else torch.float32,
-            device_map='auto' if model_config.get('device') == 'auto' else None
-        )
+        # self.model = AutoModelForCausalLM.from_pretrained(
+        #     model_name,
+        #     torch_dtype=torch.float16 if model_config.get('quantization') else torch.float32,
+        #     device_map='auto' if model_config.get('device') == 'auto' else None
+        # )
+
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+                'microsoft/DialoGPT-small',
+                num_labels=2,  # Binary: UP/DOWN
+                pad_token_id=self.tokenizer.eos_token_id,
+                problem_type="single_label_classification"
+                )
+
+        # print("Available modules in the model:")
+        # for name, module in self.model.named_modules():
+        #     print(name)
         
         # Setup LoRA if enabled
         if model_config.get('architecture', {}).get('use_lora', False):
@@ -75,23 +131,41 @@ class FinancialModelTrainer:
         
         logger.info(f"Initialized model: {model_name}")
     
+    # def _setup_lora(self):
+    #     """Setup LoRA configuration."""
+    #     lora_config = self.config.get('model', {}).get('architecture', {})
+        
+    #     peft_config = LoraConfig(
+    #         task_type=TaskType.CAUSAL_LM,
+    #         r=lora_config.get('lora_rank', 16),
+    #         lora_alpha=lora_config.get('lora_alpha', 32),
+    #         lora_dropout=lora_config.get('lora_dropout', 0.1),
+    #         target_modules=lora_config.get('target_modules', ["c_attn", "c_proj"]),
+    #         bias="none"
+    #     )
+        
+    #     self.model = get_peft_model(self.model, peft_config)
+    #     self.model.print_trainable_parameters()
+        
+    #     logger.info("Setup LoRA configuration")
+
     def _setup_lora(self):
-        """Setup LoRA configuration."""
+        """Setup LoRA configuration for sequence classification."""
         lora_config = self.config.get('model', {}).get('architecture', {})
         
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
+            task_type=TaskType.SEQ_CLS,  # Changed from CAUSAL_LM to SEQ_CLS
             r=lora_config.get('lora_rank', 16),
             lora_alpha=lora_config.get('lora_alpha', 32),
             lora_dropout=lora_config.get('lora_dropout', 0.1),
-            target_modules=lora_config.get('target_modules', ["q_proj", "v_proj"]),
-            bias="none"
+            target_modules=lora_config.get('target_modules', ["c_attn", "c_proj"]),
+            bias="none",
+            inference_mode=False,  # Important for training
         )
         
         self.model = get_peft_model(self.model, peft_config)
         self.model.print_trainable_parameters()
-        
-        logger.info("Setup LoRA configuration")
+    
     
     def _prepare_training_args(self, output_dir: str) -> TrainingArguments:
         """Prepare training arguments."""
@@ -111,7 +185,7 @@ class FinancialModelTrainer:
             max_grad_norm=training_config.get('max_grad_norm', 1.0),
             
             # Evaluation and saving
-            evaluation_strategy=validation_config.get('eval_strategy', 'steps'),
+            eval_strategy=validation_config.get('eval_strategy', 'steps'),
             eval_steps=validation_config.get('eval_steps', 500),
             save_strategy=validation_config.get('save_strategy', 'steps'),
             save_steps=validation_config.get('save_steps', 1000),
@@ -184,10 +258,19 @@ class FinancialModelTrainer:
         training_args = self._prepare_training_args(output_dir)
         
         # Create data collator
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=self.tokenizer,
-            mlm=False
-        )
+        # data_collator = DataCollatorForLanguageModeling(
+        #     tokenizer=self.tokenizer,
+        #     mlm=False
+        # )
+        # data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
+
+        # data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
+
+        data_collator = DataCollatorWithMetadata(tokenizer=self.tokenizer)
+
+        # 4. Remove non-tensor columns
+        # train_dataset = train_dataset.remove_columns(['symbol', 'date'])
+        # eval_dataset = eval_dataset.remove_columns(['symbol', 'date'])
         
         # Create trainer
         self.trainer = Trainer(
@@ -195,7 +278,7 @@ class FinancialModelTrainer:
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            data_collator=data_collator,
+            data_collator= data_collator,
             compute_metrics=self._compute_metrics,
             tokenizer=self.tokenizer
         )
@@ -258,7 +341,7 @@ class FinancialModelTrainer:
         Args:
             model_path: Path to the saved model
         """
-        self.model = AutoModelForCausalLM.from_pretrained(model_path)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         
         logger.info(f"Model loaded from {model_path}")
