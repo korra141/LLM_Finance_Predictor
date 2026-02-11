@@ -14,7 +14,8 @@ from transformers import (
     Trainer,
     DataCollatorForLanguageModeling,
     DataCollatorWithPadding,
-    default_data_collator
+    default_data_collator,
+    TrainerCallback
 )
 from peft import LoraConfig, get_peft_model, TaskType
 import logging
@@ -23,6 +24,7 @@ import yaml
 import os
 from datetime import datetime
 import wandb
+import psutil
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,14 @@ class DataCollatorWithMetadata:
 
 
 
-
+class MemoryLoggingCallback(TrainerCallback):
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        process = psutil.Process(os.getpid())
+        # Convert bytes to GB
+        mem_gb = process.memory_info().rss / (1024 ** 3)
+        print(f"--- Step {state.global_step}: RAM Usage: {mem_gb:.2f} GB ---")
+        if logs is not None:
+            logs["ram_usage_gb"] = mem_gb
 
 class FinancialModelTrainer:
     """Trainer for fine-tuning financial prediction models."""
@@ -258,15 +267,15 @@ class FinancialModelTrainer:
         training_args = self._prepare_training_args(output_dir)
         
         # Create data collator
-        # data_collator = DataCollatorForLanguageModeling(
-        #     tokenizer=self.tokenizer,
-        #     mlm=False
-        # )
-        # data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
+        #data_collator = DataCollatorForLanguageModeling(
+         #   tokenizer=self.tokenizer,
+          #  mlm=False
+       # )
+        data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
 
         # data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
 
-        data_collator = DataCollatorWithMetadata(tokenizer=self.tokenizer)
+        # data_collator = DataCollatorWithMetadata(tokenizer=self.tokenizer)
 
         # 4. Remove non-tensor columns
         # train_dataset = train_dataset.remove_columns(['symbol', 'date'])
@@ -280,7 +289,8 @@ class FinancialModelTrainer:
             eval_dataset=eval_dataset,
             data_collator= data_collator,
             compute_metrics=self._compute_metrics,
-            tokenizer=self.tokenizer
+            callbacks=[MemoryLoggingCallback()]
+            # tokenizer=self.tokenizer
         )
         
         # Start training
